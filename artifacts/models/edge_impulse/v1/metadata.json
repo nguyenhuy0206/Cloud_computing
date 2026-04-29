@@ -1,0 +1,6 @@
+{
+    "model_version": "v1",
+    "source": "edge_impulse",
+    "target": "raspberry-pi4",
+    "task": "detection"
+}
