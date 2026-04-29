@@ -1,0 +1,33 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Keys and config files
+config.txt
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models and downloaded artifacts during test
+downloaded_model_test.eim
+*.eim.tmp
+*.eim.bak
+test_blob.py
+data/to_upload/*
+data/uploaded/*
+!data/to_upload/.gitkeep
+!data/uploaded/.gitkeep
+
+# Docs and temporary files
+*.docx
+*.pdf
+.DS_Store
