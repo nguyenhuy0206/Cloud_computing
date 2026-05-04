@@ -1,3 +1,6 @@
 # Phase 1 MVP runs in mock mode with Python standard library only.
 # Optional dependency for real Azure IoT Hub mode:
 # azure-iot-device>=2.14.0
+requests
+azure-storage-blob
+python-dotenv
