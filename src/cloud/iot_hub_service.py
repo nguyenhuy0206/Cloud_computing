@@ -12,9 +12,15 @@ Cloud uses: azure-iot-hub (IoTHubRegistryManager)
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import time
+import urllib.parse
 from typing import Any, Dict, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -22,25 +28,45 @@ TWIN_MODEL_UPDATE_KEY = "modelUpdate"  # Must match device_service.py on the Pi
 
 
 class IoTHubService:
-    """Cloud-side Device Twin manager.
+    """Cloud-side Device Twin manager using Azure REST API.
 
     Usage (by Teammate A's orchestrator after uploading model):
-        svc = IoTHubService(hub_connection_string="HostName=...")
-        svc.notify_device_of_new_model("esp32", "v2.0.1", sas_url)
+        svc = IoTHubService(hub_connection_string="HostName=...;SharedAccessKeyName=iothubowner;...")
+        svc.notify_device_of_new_model("piedge", "v2.0.1", sas_url)
     """
 
     def __init__(self, hub_connection_string: str) -> None:
         if not hub_connection_string:
             raise ValueError("IOT_HUB_SERVICE_CONNECTION_STRING is required.")
-        try:
-            from azure.iot.hub import IoTHubRegistryManager
-        except ImportError as exc:
-            raise RuntimeError(
-                "azure-iot-hub not installed. Run: pip install azure-iot-hub"
-            ) from exc
+        
+        # Parse connection string
+        parts = dict(p.split("=", 1) for p in hub_connection_string.split(";") if "=" in p)
+        self.hostname = parts.get("HostName")
+        self.key_name = parts.get("SharedAccessKeyName")
+        self.key = parts.get("SharedAccessKey")
+        
+        if not (self.hostname and self.key_name and self.key):
+            raise ValueError(
+                "Invalid Connection String. Make sure it contains HostName, SharedAccessKeyName, and SharedAccessKey."
+            )
+            
+        logger.info("[IoTHubService] Initialized REST API client for IoT Hub (bypassed uamqp).")
 
-        self._registry = IoTHubRegistryManager(hub_connection_string)
-        logger.info("[IoTHubService] Connected to IoT Hub registry.")
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _generate_sas_token(self, expiry_seconds: int = 3600) -> str:
+        """Generate a SAS token to authenticate REST API requests."""
+        ttl = int(time.time()) + expiry_seconds
+        uri = urllib.parse.quote_plus(self.hostname)
+        sign_key = base64.b64decode(self.key)
+        to_sign = f"{uri}\n{ttl}".encode("utf-8")
+        signature = base64.b64encode(
+            hmac.new(sign_key, to_sign, hashlib.sha256).digest()
+        ).decode("utf-8")
+        
+        return f"SharedAccessSignature sr={uri}&sig={urllib.parse.quote_plus(signature)}&se={ttl}&skn={self.key_name}"
 
     # ------------------------------------------------------------------
     # Public API
@@ -52,11 +78,14 @@ class IoTHubService:
         version: str,
         download_url: str,
     ) -> None:
-        """Update Device Twin desired properties to trigger OTA on the Pi.
-
-        The Pi's DeviceService (device_service.py) will receive this patch
-        automatically via the Twin patch listener and kick off the download.
-        """
+        """Update Device Twin desired properties to trigger OTA on the Pi."""
+        token = self._generate_sas_token()
+        url = f"https://{self.hostname}/twins/{device_id}?api-version=2020-03-13"
+        
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
         twin_patch = {
             "properties": {
                 "desired": {
@@ -73,15 +102,28 @@ class IoTHubService:
             device_id,
             version,
         )
-        # etag="*" means update regardless of current etag (force patch)
-        self._registry.update_twin(device_id, twin_patch, "*")
-        logger.info("[IoTHubService] Device Twin patch sent successfully.")
+        resp = requests.patch(url, headers=headers, json=twin_patch, timeout=10)
+        
+        if resp.status_code >= 400:
+            logger.error("[IoTHubService] Patch failed: %s", resp.text)
+        resp.raise_for_status()
+        
+        logger.info("[IoTHubService] Device Twin patch sent successfully via REST.")
 
     def get_reported_status(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Read what the Pi last reported about its current model (for verification)."""
-        twin = self._registry.get_twin(device_id)
-        reported = twin.properties.reported
-        return reported.get("currentModel") if reported else None
+        token = self._generate_sas_token()
+        url = f"https://{self.hostname}/twins/{device_id}?api-version=2020-03-13"
+        headers = {"Authorization": token}
+        
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        
+        data = resp.json()
+        reported = data.get("properties", {}).get("reported", {})
+        return reported.get("currentModel")
 
     def wait_for_device_confirmation(
         self,
@@ -90,10 +132,7 @@ class IoTHubService:
         timeout_sec: int = 120,
         poll_interval_sec: int = 5,
     ) -> bool:
-        """Poll reported properties until the Pi confirms the new model version.
-
-        Returns True if confirmed within timeout, False otherwise.
-        """
+        """Poll reported properties until the Pi confirms the new model version."""
         logger.info(
             "[IoTHubService] Waiting for '%s' to confirm model %s ...",
             device_id,

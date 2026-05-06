@@ -39,9 +39,9 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 DEVICE_CONNECTION_STRING = os.getenv(
     "IOT_HUB_DEVICE_CONNECTION_STRING",
-    "HostName=my-iot-hub-2026.azure-devices.net;"
-    "DeviceId=esp32;"
-    "SharedAccessKey=7m30yuToe7rivjWmyX3lNzYENYKu/73lBGAtlxoRyZs="
+    "HostName=<HOSTNAME>"
+    "DeviceId=<DEVICE>"
+    "SharedAccessKey=<KEY>"
 )
 
 # Teammate A needs to provide this (iothubowner policy connection string)
